@@ -1,75 +1,126 @@
 import nltk
 from nltk.tokenize import word_tokenize
 from nltk.stem import WordNetLemmatizer
-import numpy as np
-import random
 import pickle
-from collections import Counter
+import numpy as np
+import pandas as pd
 
 lemmatizer = WordNetLemmatizer()
-hm_lines = 10000000
 
-# list of all words from datasets
-def create_lexicon(pos, neg):
+'''
+polarity 0 = negative. 2 = neutral. 4 = positive.
+id
+date
+query
+user
+tweet
+'''
+
+def init_process(fin,fout):
+	outfile = open(fout,'a')
+	with open(fin, buffering=200000, encoding='latin-1') as f:
+		try:
+			for line in f:
+				line = line.replace('"','')
+				initial_polarity = line.split(',')[0]
+				if initial_polarity == '0':
+					initial_polarity = [1,0]
+				elif initial_polarity == '4':
+					initial_polarity = [0,1]
+
+				tweet = line.split(',')[-1]
+				outline = str(initial_polarity)+':::'+tweet
+				outfile.write(outline)
+		except Exception as e:
+			print(str(e))
+	outfile.close()
+
+init_process('pos_neg_data/training.1600000.processed.noemoticon.csv','pos_neg_data/train_set.csv')
+init_process('pos_neg_data/testdata.manual.2009.06.14.csv','pos_neg_data/test_set.csv')
+
+
+def create_lexicon(fin):
 	lexicon = []
-	for fi in [pos, neg]:
-		with open(fi,'r') as f:
-			contents = f.readlines()
-			for l in contents[:hm_lines]:
-				all_words = word_tokenize(l)
-				lexicon += list(all_words)
-	lexicon = [lemmatizer.lemmatize(i) for i in lexicon]
-	# w_counts = {'the':12345, 'and':1234}
-	w_counts = Counter(lexicon)
+	with open(fin, 'r', buffering=100000, encoding='latin-1') as f:
+		try:
+			counter = 1
+			content = ''
+			for line in f:
+				counter += 1
+				if (counter/2500.0).is_integer():
+					tweet = line.split(':::')[1]
+					content += ' '+tweet
+					words = word_tokenize(content)
+					words = [lemmatizer.lemmatize(i) for i in words]
+					lexicon = list(set(lexicon + words))
+					print(counter, len(lexicon))
 
-	l2 = []
-	for w in w_counts:
-		if 1000 > w_counts[w] > 50:
-			l2.append(w)
+		except Exception as e:
+			print(str(e))
 
-	print(len(l2))
-	return l2
+	with open('pos_neg_data/lexicon-2500-2638.pickle','wb') as f:
+		pickle.dump(lexicon,f)
 
-def sample_handling(sample, lexicon, classification):
-	featureset = []
-	with open(sample, 'r') as f:
-		contents = f.readlines()
-		for l in contents[:hm_lines]:
-			current_words = word_tokenize(l.lower())
+create_lexicon('pos_neg_data/train_set.csv')
+
+
+def convert_to_vec(fin,fout,lexicon_pickle):
+	with open(lexicon_pickle,'rb') as f:
+		lexicon = pickle.load(f)
+	outfile = open(fout,'a')
+	with open(fin, buffering=20000, encoding='latin-1') as f:
+		counter = 0
+		for line in f:
+			counter +=1
+			label = line.split(':::')[0]
+			tweet = line.split(':::')[1]
+			current_words = word_tokenize(tweet.lower())
 			current_words = [lemmatizer.lemmatize(i) for i in current_words]
+
 			features = np.zeros(len(lexicon))
+
 			for word in current_words:
 				if word.lower() in lexicon:
 					index_value = lexicon.index(word.lower())
+					# OR DO +=1, test both
 					features[index_value] += 1
+
 			features = list(features)
-			featureset.append([features, classification])
+			outline = str(features)+'::'+str(label)+'\n'
+			outfile.write(outline)
 
-	return featureset
+		print(counter)
+
+convert_to_vec('pos_neg_data/test_set.csv','pos_neg_data/processed-test-set.csv','pos_neg_data/lexicon-2500-2638.pickle')
 
 
-def create_feature_sets_and_labels(pos, neg, test_size=0.1):
-	lexicon = create_lexicon(pos, neg)
-	features = []
-	features += sample_handling('pos_neg_data/pos.txt', lexicon, [1,0])
-	features += sample_handling('pos_neg_data/neg.txt', lexicon, [0,1])
-	random.shuffle(features)
+def shuffle_data(fin):
+	df = pd.read_csv(fin, error_bad_lines=False)
+	df = df.iloc[np.random.permutation(len(df))]
+	print(df.head())
+	df.to_csv('pos_neg_data/train_set_shuffled.csv', index=False)
+	
+shuffle_data('pos_neg_data/train_set.csv')
 
-	features = np.array(features)
 
-	testing_size = int(test_size * len(features))
+def create_test_data_pickle(fin):
 
-	#train_x = all 0th elements in features = featuresets
-	train_x = list(features[:,0][:-testing_size])
-	#train_y = all 1st elements in features = all expected outputs
-	train_y = list(features[:,1][:-testing_size])
+	feature_sets = []
+	labels = []
+	counter = 0
+	with open(fin, buffering=20000) as f:
+		for line in f:
+			try:
+				features = list(eval(line.split('::')[0]))
+				label = list(eval(line.split('::')[1]))
 
-	test_x = list(features[:,0][-testing_size:])
-	test_y = list(features[:,1][-testing_size:])
+				feature_sets.append(features)
+				labels.append(label)
+				counter += 1
+			except:
+				pass
+	print(counter)
+	feature_sets = np.array(feature_sets)
+	labels = np.array(labels)
 
-	return train_x, train_y, test_x, test_y
-
-if __name__ == '__main__':
-	train_x, train_y, test_x, test_y = create_feature_sets_and_labels('pos_neg_data/pos.txt', 'pos_neg_data/neg.txt')
-	with open('pos_neg_data/sentiment_set.pickle', 'wb') as f:
-		pickle.dump([train_x, train_y, test_x, test_y], f)
+create_test_data_pickle('pos_neg_data/processed-test-set.csv')
